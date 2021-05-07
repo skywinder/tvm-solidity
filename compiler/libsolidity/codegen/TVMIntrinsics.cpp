@@ -457,6 +457,12 @@ bool IntrinsicsCompiler::checkTvmIntrinsic(FunctionCall const &_functionCall) {
 		m_pusher.push(0, "HASHCU");
 		return true;
 	}
+        if (iname == "tvm_vergrth16") {
+                checkArgCount(1);
+                acceptExpr(arguments[0].get());
+                m_pusher.push(0, "VERGRTH16");
+                return true;
+        }
 	if (iname == "tvm_subslice") {
 		defaultAction(+1);
 		return true;
