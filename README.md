@@ -4,7 +4,7 @@ Port of the Solidity smart-contract [compiler](https://github.com/ethereum/solid
 
 ##  TON Solidity API reference
 
-[API documentation is here](https://github.com/tonlabs/TON-Solidity-Compiler/blob/master/API.md)
+[API documentation is here](https://github.com/nilfoundation/tvm-solidity/blob/master/API.md)
 
 ## Build and Install
 
@@ -13,8 +13,8 @@ Original Instructions about how to build and install the Solidity compiler can b
 ### Ubuntu Linux
 
 ```shell
-git clone git@github.com:tonlabs/TON-Solidity-Compiler.git
-cd TON-Solidity-Compiler
+git clone git@github.com:nilfoundation/tvm-solidity.git
+cd tvm-solidity
 sh ./compiler/scripts/install_deps.sh
 mkdir build
 cd build
@@ -34,8 +34,8 @@ Install Visual Studio, Git bash, cmake.
 Run Visual Studio Developer Command Prompt
 
 ```shell
-git clone https://github.com/tonlabs/TON-Solidity-Compiler
-cd TON-Solidity-Compiler
+git clone https://github.com/nilfoundation/tvm-solidity
+cd tvm-solidity
 cmake -P compiler\scripts\install_deps.cmake
 mkdir build
 cd build
