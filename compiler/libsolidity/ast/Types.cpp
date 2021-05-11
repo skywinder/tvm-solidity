@@ -2902,6 +2902,7 @@ string FunctionType::richIdentifier() const
 	case Kind::TVMExit: id += "tvmexit"; break;
 	case Kind::TVMFunctionId: id += "tvmfunctionid"; break;
 	case Kind::TVMHash: id += "tvmhash"; break;
+        case Kind::TVMVerGrth16: id += "tvmvergrth16"; break;
 	case Kind::TVMLoadRef: id += "tvmloadref"; break;
 	case Kind::TVMLoadSlice: id += "tvmloadslice"; break;
 	case Kind::TVMPubkey: id += "tvmpubkey"; break;
@@ -3996,6 +3997,14 @@ MemberList::MemberMap MagicType::nativeMembers(ContractDefinition const*) const
 				FunctionType::Kind::TVMHash,
 				false, StateMutability::Pure
 		));
+                members.emplace_back("vergrth16", TypeProvider::function(
+                                TypePointers{TypeProvider::tvmcell()},
+                                TypePointers{TypeProvider::boolean()},
+                                strings{string()},
+                                strings{string()},
+                                FunctionType::Kind::TVMVerGrth16,
+                                false, StateMutability::Pure
+                ));
 		members.emplace_back("checkSign", TypeProvider::function(
 				TypePointers{TypeProvider::uint256(), TypeProvider::uint256(), TypeProvider::uint256(), TypeProvider::uint256()},
 				TypePointers{TypeProvider::boolean()},

@@ -141,6 +141,7 @@ void TVMTypeChecker::checkTvmIntrinsic(FunctionDefinition const *f) {
 	deprecatedFunctionsReplacement["tvm_my_public_key"] = "tvm.pubkey()";
 	deprecatedFunctionsReplacement["tvm_chksignu"] = "tvm.checkSign()";
 	deprecatedFunctionsReplacement["tvm_hashcu"] = "tvm.hash()";
+        deprecatedFunctionsReplacement["tvm_vergrth16"] = "tvm.vergrth16()";
 	deprecatedFunctionsReplacement["tvm_accept"] = "tvm.accept()";
 	deprecatedFunctionsReplacement["tvm_unpack_address"] = "address.unpack()";
 	deprecatedFunctionsReplacement["tvm_make_address"] = "address.makeAddrStd()";

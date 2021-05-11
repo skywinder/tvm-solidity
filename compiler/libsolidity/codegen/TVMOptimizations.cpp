@@ -240,7 +240,7 @@ struct TVMOptimizer {
 			};
 			static const set<string> s11 {
 				"FITS", "UFITS", "INC", "DEC", "EQINT", "NOT",
-				"SHA256U", "HASHCU", "HASHSU", "CTOS", "INDEX",
+				"SHA256U", "HASHCU", "HASHSU", "VERGRTH16", "CTOS", "INDEX",
 				"FIRST", "SECOND", "THIRD", "PARSEMSGADDR", "SBITS", "ENDC"
 			};
 			static const set<string> s21 {
