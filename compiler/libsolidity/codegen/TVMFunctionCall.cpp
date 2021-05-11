@@ -1886,7 +1886,7 @@ bool FunctionCallCompiler::checkForTvmFunction(const MemberAccess &_node) {
 	} else if (_node.memberName() == "hash") { // tvm.hash
 		pushArgs();
 		m_pusher.push(0, "HASHCU");
-        } else if (_node.memberName() == "vergrth16") { // tvm.hash
+        } else if (_node.memberName() == "vergrth16") { // tvm.vergrth16
                 pushArgs();
                 m_pusher.push(0, "VERGRTH16");
 	} else if (_node.memberName() == "checkSign") { // tvm.checkSign
