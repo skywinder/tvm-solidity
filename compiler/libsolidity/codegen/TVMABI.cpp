@@ -24,25 +24,62 @@
 
 using namespace solidity::frontend;
 
+void TVMABI::printFunctionIds(
+	ContractDefinition const& contract,
+	PragmaDirectiveHelper const& pragmaHelper
+) {
+	TVMCompilerContext ctx{&contract, pragmaHelper};
+	StackPusherHelper pusher{&ctx};
+	ChainDataEncoder encoder{&pusher};
+	std::vector<const FunctionDefinition *> publicFunctions = TVMABI::publicFunctions(contract);
+	std::map<std::string, uint32_t> map;
+	for (FunctionDefinition const* func : publicFunctions) {
+		uint32_t functionID = encoder.calculateFunctionIDWithReason(
+			func,
+			ReasonOfOutboundMessage::RemoteCallInternal
+		);
+		const std::string name = TVMCompilerContext::getFunctionExternalName(func);
+		map[name] = functionID;
+	}
+	if (map.count("constructor") == 0) {
+		map["constructor"] = encoder.calculateConstructorFunctionID();
+	}
+	for (VariableDeclaration const* vd : ctx.notConstantStateVariables()) {
+		if (vd->isPublic()) {
+			std::vector<VariableDeclaration const*> outputs = {vd};
+			uint32_t functionId = encoder.calculateFunctionIDWithReason(
+					vd->name(),
+					{},
+					&outputs,
+					ReasonOfOutboundMessage::RemoteCallInternal,
+					nullopt,
+					false
+			);
+			map[vd->name()] = functionId;
+		}
+	}
+
+	std::string lastName = map.rbegin()->first;
+	cout << "{" << endl;
+	for (const auto&[func, functionID] : map) {
+		cout
+			<< "\t"
+			<< "\"" << func << "\": "
+			<< "\"0x" << std::hex << std::setfill('0') << std::setw(8) << functionID << "\""
+			<< (lastName == func ? "" : ",")
+			<< endl;
+	}
+	cout << "}";
+}
+
 void TVMABI::generateABI(ContractDefinition const *contract, std::vector<PragmaDirective const *> const &pragmaDirectives,
 						ostream *out) {
 
 	PragmaDirectiveHelper pdh{pragmaDirectives};
 	TVMCompilerContext ctx(contract, pdh);
 
-	std::vector<const FunctionDefinition *> publicFunctions {};
+	const std::vector<const FunctionDefinition *> publicFunctions = TVMABI::publicFunctions(*contract);
 	std::vector<const EventDefinition *> events {};
-
-	if (auto main_constr = contract->constructor(); main_constr != nullptr)
-		publicFunctions.push_back(contract->constructor());
-
-	for (auto c : contract->annotation().linearizedBaseContracts) {
-		for (const auto &_function : c->definedFunctions()) {
-			if (_function->isPublic() && !isTvmIntrinsic(_function->name()) && !_function->isConstructor() &&
-				!_function->isReceive() && !_function->isFallback() && !_function->isOnBounce() && !_function->isOnTickTock())
-				publicFunctions.push_back(_function);
-		}
-	}
 
 	for (const auto &_event : contract->interfaceEvents())
 		events.push_back(_event);
@@ -154,6 +191,21 @@ void TVMABI::generateABI(ContractDefinition const *contract, std::vector<PragmaD
 	*out << "\t" << "]\n";
 
 	*out << "}" << endl;
+}
+
+std::vector<const FunctionDefinition *> TVMABI::publicFunctions(ContractDefinition const& contract) {
+	std::vector<const FunctionDefinition *> publicFunctions;
+	if (auto main_constr = contract.constructor(); main_constr != nullptr)
+		publicFunctions.push_back(contract.constructor());
+
+	for (auto c : contract.annotation().linearizedBaseContracts) {
+		for (const auto &_function : c->definedFunctions()) {
+			if (_function->isPublic() && !isTvmIntrinsic(_function->name()) && !_function->isConstructor() &&
+				!_function->isReceive() && !_function->isFallback() && !_function->isOnBounce() && !_function->isOnTickTock())
+				publicFunctions.push_back(_function);
+		}
+	}
+	return publicFunctions;
 }
 
 void TVMABI::printData(const Json::Value &json, std::ostream* out) {
@@ -411,28 +463,29 @@ int Position::cellNumber() const {
 	return idCell;
 }
 
-DecodePositionAbiV2::DecodePositionAbiV2(int minBits, int maxBits, const ast_vec<VariableDeclaration> &params) :
+DecodePositionAbiV2::DecodePositionAbiV2(int minBits, int maxBits, const vector<Type const *>& _types, bool fastDecode) :
 		minPos{minBits, 0},
-		maxPos{maxBits, 0} {
-	for (const auto & param : params) {
-		initTypes(param.get());
+		maxPos{maxBits, 0},
+		fastDecode{fastDecode} {
+	for (const auto & type : _types) {
+		initTypes(type);
 	}
 	for (int i = 0; i < static_cast<int>(types.size()); ++i) {
-		Type const* t = types[i];
+		Type const* t = types.at(i);
 		if (isRefType(t)) {
 			lastRefType = i;
 		}
 	}
 }
 
-void DecodePositionAbiV2::initTypes(VariableDeclaration const *variable) {
-	if (variable->type()->category() == Type::Category::Struct) {
-		auto members = to<StructType>(variable->type())->structDefinition().members();
+void DecodePositionAbiV2::initTypes(Type const* type) {
+	if (type->category() == Type::Category::Struct) {
+		auto members = to<StructType>(type)->structDefinition().members();
 		for (const auto &m : members) {
-			initTypes(m.get());
+			initTypes(m->type());
 		}
 	} else {
-		types.push_back(variable->type());
+		types.push_back(type);
 	}
 }
 
@@ -451,8 +504,12 @@ DecodePosition::Algo DecodePositionAbiV2::updateStateAndGetLoadAlgo(Type const *
 			return JustLoad;
 		} else {
 			int prevMinCellNumber = minPos.cellNumber();
+			int prevMaxCellNumber = maxPos.cellNumber();
 			minPos.loadRef();
 			maxPos.loadRef();
+			if (fastDecode) {
+				return prevMaxCellNumber == maxPos.cellNumber() ? JustLoad : LoadNextCell;
+			}
 			if (prevMinCellNumber == minPos.cellNumber() && minPos.cellNumber() == maxPos.cellNumber()) {
 				return JustLoad;
 			}
@@ -464,6 +521,10 @@ DecodePosition::Algo DecodePositionAbiV2::updateStateAndGetLoadAlgo(Type const *
 	int prevMaxCellNumber = maxPos.cellNumber();
 	minPos.update(size.minBits, size.minRefs);
 	maxPos.update(size.maxBits, size.maxRefs);
+
+	if (fastDecode) {
+		return prevMaxCellNumber == maxPos.cellNumber() ? JustLoad : LoadNextCell;
+	}
 
 	if (prevMinCellNumber == minPos.cellNumber() && minPos.cellNumber() == maxPos.cellNumber()) {
 		return JustLoad;
@@ -483,12 +544,12 @@ DecodePosition::Algo DecodePositionAbiV2::updateStateAndGetLoadAlgo(Type const *
 	return CheckBits;
 }
 
-DecodeFunctionParams::DecodeFunctionParams(StackPusherHelper *pusher) :
+ChainDataDecoder::ChainDataDecoder(StackPusherHelper *pusher) :
 		pusher{pusher} {
 
 }
 
-int DecodeFunctionParams::maxBits(bool isResponsible) {
+int ChainDataDecoder::maxBits(bool isResponsible) {
 	// external inbound message
 	int maxUsed = 1 + 512 + // signature
 				  (pusher->ctx().pragmaHelper().havePubkey()? 1 + 256 : 0) +
@@ -499,47 +560,59 @@ int DecodeFunctionParams::maxBits(bool isResponsible) {
 	return maxUsed;
 }
 
-int DecodeFunctionParams::minBits(bool isResponsible) {
+int ChainDataDecoder::minBits(bool isResponsible) {
 	return 32 + (isResponsible ? 32 : 0);
 }
 
-void DecodeFunctionParams::decodeParameters(const ast_vec<VariableDeclaration> &params, bool isResponsible) {
-	// slice are on stack
-	solAssert(pusher->getStack().size() >= 1, "");
-
+void ChainDataDecoder::decodePublicFunctionParameters(const std::vector<Type const*>& types, bool isResponsible) {
+	fastLoad = false;
 	std::unique_ptr<DecodePosition> position;
 	switch (pusher->ctx().pragmaHelper().abiVersion()) {
 		case 1:
 			position = std::make_unique<DecodePositionAbiV1>();
 			break;
 		case 2: {
-			position = std::make_unique<DecodePositionAbiV2>(minBits(isResponsible), maxBits(isResponsible), params);
+			position = std::make_unique<DecodePositionAbiV2>(minBits(isResponsible), maxBits(isResponsible), types, false);
 			break;
 		}
 		default:
 			solUnimplemented("");
 	}
+	decodeParameters(types, std::move(position));
+}
 
-	pusher->push(0, "; Decode input parameters");
-	for (const auto & variable : params) {
-		pusher->push(0, "; Decode " + variable->name());
+void ChainDataDecoder::decodeData(const std::vector<Type const*>& types, int offset, bool _fastLoad) {
+	fastLoad = _fastLoad;
+	std::unique_ptr<DecodePosition> position;
+	position = std::make_unique<DecodePositionAbiV2>(offset, offset, types, fastLoad);
+	decodeParameters(types, std::move(position));
+}
+
+void ChainDataDecoder::decodeParameters(
+	const std::vector<Type const*>& types,
+	std::unique_ptr<DecodePosition> position
+) {
+	// slice are on stack
+	solAssert(pusher->getStack().size() >= 1, "");
+
+	for (const auto & type : types) {
 		auto savedStackSize = pusher->getStack().size();
-		decodeParameter(variable.get(), position.get());
+		decodeParameter(type, position.get());
 		pusher->getStack().ensureSize(savedStackSize + 1, "decodeParameter-2");
 	}
 	pusher->push(-1, "ENDS"); // only ENDS
 
-	solAssert(static_cast<int>(params.size()) <= pusher->getStack().size(), "");
+	solAssert(static_cast<int>(types.size()) <= pusher->getStack().size(), "");
 }
 
-void DecodeFunctionParams::loadNextSlice() {
+void ChainDataDecoder::loadNextSlice() {
 	pusher->push(0, ";; load next cell");
 	pusher->push(0, "LDREF");
 	pusher->push(0, "ENDS"); // only ENDS
 	pusher->push(0, "CTOS");
 }
 
-void DecodeFunctionParams::checkBitsAndLoadNextSlice() {
+void ChainDataDecoder::checkBitsAndLoadNextSlice() {
 	pusher->pushLines(R"(DUP
 SDEMPTY
 PUSHCONT {
@@ -551,7 +624,7 @@ IF
 )");
 }
 
-void DecodeFunctionParams::checkRefsAndLoadNextSlice() {
+void ChainDataDecoder::checkRefsAndLoadNextSlice() {
 	pusher->pushLines(R"(DUP
 SREFS
 EQINT 1
@@ -564,7 +637,7 @@ IF
 )");
 }
 
-void DecodeFunctionParams::checkBitsAndRefsAndLoadNextSlice() {
+void ChainDataDecoder::checkBitsAndRefsAndLoadNextSlice() {
 	// check that bits==0 and ref==1
 	pusher->pushLines(R"(DUP
 SBITREFS
@@ -581,8 +654,7 @@ IF
 )");
 }
 
-void DecodeFunctionParams::loadNextSliceIfNeed(const DecodePosition::Algo algo, VariableDeclaration const *variable,
-											   bool isRefType) {
+void ChainDataDecoder::loadNextSliceIfNeed(const DecodePosition::Algo algo, bool isRefType) {
 	switch (algo) {
 		case DecodePosition::JustLoad:
 			break;
@@ -600,41 +672,44 @@ void DecodeFunctionParams::loadNextSliceIfNeed(const DecodePosition::Algo algo, 
 			break;
 		case DecodePosition::Unknown:
 			if (isRefType) {
-				cast_error(*variable, "Too much refs types");
+				solUnimplemented("Too much refs types");
 			}
 			checkBitsAndLoadNextSlice();
 			break;
 	}
 }
 
-void DecodeFunctionParams::loadq(const DecodePosition::Algo algo, const std::string &opcodeq, const std::string &opcode) {
+void ChainDataDecoder::loadq(const DecodePosition::Algo algo, const std::string &opcodeq, const std::string &opcode) {
 	if (algo == DecodePosition::Algo::JustLoad) {
 		pusher->push(+1, opcode);
 	} else {
-		pusher->push(+1, opcodeq);
-		pusher->startContinuationFromRef();
-		loadNextSlice();
-		pusher->push(0, opcode);
-		pusher->endContinuation();
-		pusher->push(0, "IFNOT");
+		if (fastLoad) {
+			loadNextSlice();
+			pusher->push(+1, opcode);
+		} else {
+			pusher->push(+1, opcodeq);
+			pusher->startContinuation();
+			loadNextSlice();
+			pusher->push(0, opcode);
+			pusher->endContinuation();
+			pusher->push(0, "IFNOT");
+		}
 	}
 }
 
-// TODO unit with loadTypeFromSlice
-void DecodeFunctionParams::decodeParameter(VariableDeclaration const *variable, DecodePosition *position) {
-	auto type = getType(variable);
-	const Type::Category category = variable->type()->category();
+void ChainDataDecoder::decodeParameter(Type const* type, DecodePosition *position) {
+	const Type::Category category = type->category();
 	if (to<TvmCellType>(type)) {
 		pusher->push(0, ";; decode TvmCell");
-		loadNextSliceIfNeed(position->updateStateAndGetLoadAlgo(type), variable, true);
+		loadNextSliceIfNeed(position->updateStateAndGetLoadAlgo(type), true);
 		pusher->push(+1, "LDREF");
 	} else if (auto structType = to<StructType>(type)) {
 		ASTString const& structName = structType->structDefinition().name();
-		pusher->push(0, ";; decode struct " + structName + " " + variable->name());
+		pusher->push(0, ";; decode struct " + structName + " " + type->toString());
 		ast_vec<VariableDeclaration> const& members = structType->structDefinition().members();
 		for (const ASTPointer<VariableDeclaration> &m : members) {
 			pusher->push(0, ";; decode " + structName + "." + m->name());
-			decodeParameter(m.get(), position);
+			decodeParameter(m->type(), position);
 		}
 		pusher->push(0, ";; build struct " + structName + " ss:" + toString(pusher->getStack().size()));
 		// members... slice
@@ -654,15 +729,21 @@ void DecodeFunctionParams::decodeParameter(VariableDeclaration const *variable, 
 			  (ti.isSigned ? "LDI " : "LDU ") + toString(ti.numBits));
 	} else if (auto arrayType = to<ArrayType>(type)) {
 		if (arrayType->isByteArray()) {
-			loadNextSliceIfNeed(position->updateStateAndGetLoadAlgo(type), variable, true);
+			loadNextSliceIfNeed(position->updateStateAndGetLoadAlgo(type), true);
 			pusher->push(+1, "LDREF");
 		} else {
-			loadNextSliceIfNeed(position->updateStateAndGetLoadAlgo(type), variable, false);
+			loadNextSliceIfNeed(position->updateStateAndGetLoadAlgo(type), false);
 			pusher->load(type, false);
 		}
 	} else if (to<MappingType>(type)) {
 		DecodePosition::Algo algo = position->updateStateAndGetLoadAlgo(type);
 		loadq(algo, "LDDICTQ", "LDDICT");
+	} else if (to<OptionalType>(type)) {
+		loadNextSliceIfNeed(position->updateStateAndGetLoadAlgo(type), false);
+		pusher->load(type, false);
+	} else if (to<FunctionType>(type)) {
+		DecodePosition::Algo algo = position->updateStateAndGetLoadAlgo(type);
+		loadq(algo, "LDUQ 32", "LDU 32");
 	} else {
 		solUnimplemented("Unsupported parameter type for decoding: " + type->toString());
 	}
@@ -731,7 +812,7 @@ int EncodePosition::countOfCreatedBuilders() const {
 	return qtyOfCreatedBuilders;
 }
 
-void EncodeFunctionParams::createDefaultConstructorMsgBodyAndAppendToBuilder(const int bitSizeBuilder)
+void ChainDataEncoder::createDefaultConstructorMsgBodyAndAppendToBuilder(const int bitSizeBuilder)
 {
 	uint32_t funcID = calculateConstructorFunctionID();
 	std::stringstream ss;
@@ -748,7 +829,7 @@ void EncodeFunctionParams::createDefaultConstructorMsgBodyAndAppendToBuilder(con
 	}
 }
 
-void EncodeFunctionParams::createDefaultConstructorMessage2()
+void ChainDataEncoder::createDefaultConstructorMessage2()
 {
 	uint32_t funcID = calculateConstructorFunctionID();
 	std::stringstream ss;
@@ -756,12 +837,12 @@ void EncodeFunctionParams::createDefaultConstructorMessage2()
 	pusher->push(0, "STSLICECONST " + ss.str());
 }
 
-uint32_t EncodeFunctionParams::calculateConstructorFunctionID() {
+uint32_t ChainDataEncoder::calculateConstructorFunctionID() {
 	std::vector<VariableDeclaration const*> vect;
 	return calculateFunctionID("constructor", {}, &vect) & 0x7FFFFFFFu;
 }
 
-std::pair<uint32_t, bool> EncodeFunctionParams::calculateFunctionID(const CallableDeclaration *declaration) {
+std::pair<uint32_t, bool> ChainDataEncoder::calculateFunctionID(const CallableDeclaration *declaration) {
 	auto functionDefinition = to<FunctionDefinition>(declaration);
 	if (functionDefinition != nullptr && functionDefinition->functionID().has_value()) {
 		return {functionDefinition->functionID().value(), true};
@@ -792,7 +873,7 @@ std::pair<uint32_t, bool> EncodeFunctionParams::calculateFunctionID(const Callab
 	return {id, false};
 }
 
-uint32_t EncodeFunctionParams::calculateFunctionID(
+uint32_t ChainDataEncoder::calculateFunctionID(
 		const std::string& name,
 		const std::vector<Type const*>& inputs,
 		const std::vector<VariableDeclaration const*> * outputs
@@ -845,7 +926,7 @@ uint32_t EncodeFunctionParams::calculateFunctionID(
 	return funcID;
 }
 
-uint32_t EncodeFunctionParams::calculateFunctionIDWithReason(
+uint32_t ChainDataEncoder::calculateFunctionIDWithReason(
 		const CallableDeclaration *funcDef,
 		const ReasonOfOutboundMessage &reason
 ) {
@@ -871,7 +952,7 @@ uint32_t EncodeFunctionParams::calculateFunctionIDWithReason(
 	return calculateFunctionIDWithReason(name, getTypesFromVarDecls(funcDef->parameters()), retParams, reason, functionId, isResponsible);
 }
 
-uint32_t EncodeFunctionParams::calculateFunctionIDWithReason(
+uint32_t ChainDataEncoder::calculateFunctionIDWithReason(
 		const std::string& name,
 		std::vector<Type const*> inputs,
 		const std::vector<VariableDeclaration const*> *outputs,
@@ -901,7 +982,7 @@ uint32_t EncodeFunctionParams::calculateFunctionIDWithReason(
 	return funcID;
 }
 
-void EncodeFunctionParams::createMsgBodyAndAppendToBuilder(
+void ChainDataEncoder::createMsgBodyAndAppendToBuilder(
 	const std::function<void(size_t)>& pushParam,
 	const std::vector<VariableDeclaration const*> &params,
 	const std::variant<uint32_t, std::function<void()>>& functionId,
@@ -932,7 +1013,7 @@ void EncodeFunctionParams::createMsgBodyAndAppendToBuilder(
 	solAssert(saveStackSize == pusher->getStack().size(), "");
 }
 
-void EncodeFunctionParams::createMsgBody(
+void ChainDataEncoder::createMsgBody(
 	const std::function<void (size_t)> &pushParam,
 	const std::vector<VariableDeclaration const*> &params,
 	const std::variant<uint32_t, std::function<void()>>& functionId,
@@ -958,25 +1039,26 @@ void EncodeFunctionParams::createMsgBody(
 		pusher->push(0, "STSLICECONST " + ss.str());
 	}
 
-	encodeParameters(types, nodes, pushParam, position);
+	encodeParameters(types, pushParam, position);
 }
 
 void
-EncodeFunctionParams::encodeParameters(const std::vector<Type const *> &types, const std::vector<ASTNode const *> &nodes,
-									const std::function<void(size_t)> &pushParam,
-									EncodePosition &position) {
+ChainDataEncoder::encodeParameters(
+	const std::vector<Type const *> &types,
+	const std::function<void(size_t)> &pushParam,
+	EncodePosition &position
+) {
 	// builder must be situated on top stack
-	solAssert(types.size() == nodes.size(), "");
 	for (size_t idx = 0; idx < types.size(); idx++) {
 		auto type = types[idx];
-		encodeParameter(type, position, [&](){pushParam(idx);}, nodes[idx]);
+		encodeParameter(type, position, [&](){pushParam(idx);});
 	}
 	for (int idx = 0; idx < position.countOfCreatedBuilders(); idx++) {
 		pusher->push(-1, "STBREFR");
 	}
 }
 
-std::string EncodeFunctionParams::getTypeString(Type const * type) {
+std::string ChainDataEncoder::getTypeString(Type const * type) {
 	if (auto structType = to<StructType>(type)) {
 		std::string ret = "(";
 		for (size_t i = 0; i < structType->structDefinition().members().size(); i++) {
@@ -996,12 +1078,15 @@ std::string EncodeFunctionParams::getTypeString(Type const * type) {
 	return TVMABI::getParamTypeString(type);
 }
 
-void EncodeFunctionParams::encodeParameter(Type const *type, EncodePosition &position,
-										const std::function<void()> &pushParam, ASTNode const *node) {
+void ChainDataEncoder::encodeParameter(
+	Type const *type,
+	EncodePosition &position,
+	const std::function<void()> &pushParam
+) {
 	// stack: builder...
 	if (auto structType = to<StructType>(type)) {
 		pushParam(); // builder... struct
-		encodeStruct(structType, node, position); // stack: builder...
+		encodeStruct(structType, position); // stack: builder...
 	} else {
 		if (position.needNewCell(type)) {
 			pusher->push(+1, "NEWC");
@@ -1029,13 +1114,16 @@ void EncodeFunctionParams::encodeParameter(Type const *type, EncodePosition &pos
 			pushParam();
 			pusher->push(0, "SWAP");
 			pusher->push(-1, "STDICT");
+		} else if (to<OptionalType>(type) || to<FunctionType>(type)) {
+			pushParam();
+			pusher->store(type, true);
 		} else {
-			cast_error(*node, "Unsupported type for encoding: " + type->toString());
+			solUnimplemented("Unsupported type for encoding: " + type->toString());
 		}
 	}
 }
 
-void EncodeFunctionParams::encodeStruct(const StructType* structType, ASTNode const* node, EncodePosition& position) {
+void ChainDataEncoder::encodeStruct(const StructType* structType, EncodePosition& position) {
 	// builder... builder struct
 	const int saveStackSize0 = pusher->getStack().size() - 2;
 	ast_vec<VariableDeclaration> const& members = structType->structDefinition().members();
@@ -1046,7 +1134,7 @@ void EncodeFunctionParams::encodeStruct(const StructType* structType, ASTNode co
 		encodeParameter(members[i]->type(), position, [&]() {
 			const int index = pusher->getStack().size() - saveStackSize0 - 1 - i;
 			pusher->pushS(index);
-		}, node);
+		});
 	}
 
 	// builder... values... builder...

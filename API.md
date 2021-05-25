@@ -59,13 +59,17 @@ contract development.
 * [Changes and extensions in solidity types](#changes-and-extensions-in-solidity-types)
   * [struct](#struct)
     * [\<struct\>.unpack()](#structunpack)
+  * [arrays](#arrays)
+    * [\<array\>.empty()](#arrayempty)
   * [bytes](#bytes)
+    * [\<bytes\>.empty()](#bytesempty)
     * [\<bytes\>.operator[]](#bytesoperator)
     * [\<bytes\>.length](#byteslength)
     * [\<bytes\>.toSlice](#bytestoslice)
     * [\<bytes\>.dataSize()](#bytesdatasize)
     * [\<bytes\>.dataSizeQ()](#bytesdatasizeq)
   * [string](#string)
+    * [\<string\>.empty()](#stringempty)
     * [\<string\>.byteLength()](#stringbytelength)
     * [\<string\>.substr()](#stringsubstr)
     * [\<string\>.append()](#stringappend)
@@ -169,6 +173,9 @@ contract development.
       * [Another deploy options](#another-deploy-options)
       * [New contract address problem](#new-contract-address-problem)
     * [Misc functions from `tvm`](#misc-functions-from-tvm)
+      * [tvm.code()](#tvmcode)
+      * [tvm.codeSalt()](#tvmcodesalt)
+      * [tvm.setCodeSalt()](#tvmsetcodesalt)
       * [tvm.pubkey()](#tvmpubkey)
       * [tvm.setPubkey()](#tvmsetpubkey)
       * [tvm.setCurrentCode()](#tvmsetcurrentcode)
@@ -177,6 +184,7 @@ contract development.
       * [tvm.encodeBody()](#tvmencodebody)
       * [tvm.exit() and tvm.exit1()](#tvmexit-and-tvmexit1)
       * [tvm.buildExtMsg()](#tvmbuildextmsg)
+      * [tvm.buildIntMsg()](#tvmbuildintmsg)
   * [**math** namespace](#math-namespace)
     * [math.min() math.max()](#mathmin-mathmax)
     * [math.minmax()](#mathminmax)
@@ -196,12 +204,14 @@ contract development.
     * [rnd.getSeed](#rndgetseed)
     * [rnd.setSeed](#rndsetseed)
     * [rnd.shuffle](#rndshuffle)
+  * [Exponentiation](#exponentiation)
   * [selfdestruct](#selfdestruct)
   * [sha256](#sha256)
   * [gasToValue](#gastovalue)
   * [valueToGas](#valuetogas)
 * [Solidity runtime errors](#solidity-runtime-errors)
 * [Division and rounding](#division-and-rounding)
+* [Gas optimization hints](#division-and-rounding)
 
 ## Detailed description
 
@@ -546,7 +556,30 @@ depths of cells referred to from the builder.
 <TvmBuilder>.store(/*list_of_values*/);
 ```
 
-Stores values in the builder. Example:
+Stores values in the builder.
+
+Internal representation of the stored data:
+ * `uintN`/`intN`/`bytesN` - stored as an N-bit string.
+For example, `uint8(100), int16(-3), bytes2(0xaabb)` stored as `0x64fffdaabb`.
+ * `bool` - stored as a binary zero for `false` or a binary one for `true`. For example,
+`true, false, true` stored as `0xb_`.
+ * `ufixedMxN`/`fixedMxN` - stored as an M-bit string.
+ * `address`/`contract` - stored according to the [TL-B scheme][3] of `MsgAddress`.
+ * `TvmCell`/`bytes`/`string` - stored as a cell in reference.
+ * `TvmSlice`/`TvmBuilder` - all data bits and references of the `TvmSlice` or the `TvmBuilder`
+are appended to the builder. Not in a reference as `TvmCell`. To store `TvmSlice`/`TvmBuilder` in
+the references use [\<TvmBuilder\>.storeRef()](#tvmbuilderstoreref).
+ * `mapping`/`ExtraCurrencyCollection` - stored according to the [TL-B scheme][3] of `HashmapE`: if map is
+empty then stored as a binary zero; else as a binary one and the dictionary `Hashmap` in a reference.
+ * `array` - stored as a 32 bit value - size of the array and a `HashmapE` that contains all values of
+the array.
+ * `optional` - stored as a binary zero if the `optional` doesn't contain value. Otherwise, stored as
+a binary one and the cell with serialized value in a reference.
+
+**Note:** there are no gapes or offsets between two consecutive data stored in the builder.  
+See [TVM][1] to read about notation for bit strings.
+
+Example:
 
 ```TVMSolidity
 uint8 a = 11;
@@ -576,14 +609,12 @@ Stores an unsigned integer **value** with given **bitSize** in the builder.
 ##### \<TvmBuilder\>.storeRef()
 
 ```TVMSolidity
-// (1)
 <TvmBuilder>.storeRef(TvmBuilder b);
-// (2)
 <TvmBuilder>.storeRef(TvmCell c);
+<TvmBuilder>.storeRef(TvmSlice s);
 ```
 
-1. Stores `b` in a reference of the builder.
-2. Stores `c` in a reference of the builder.
+Stores `TvmBuilder b`/`TvmCell c`/`TvmSlice c` in the reference of the builder.
 
 ##### \<TvmBuilder\>.storeTons()
 
@@ -715,7 +746,7 @@ Key or value can be omitted if you iterate over mapping:
 mapping(uint32 => uint) map = ...;
 
 uint keySum = 0;
-for ((uint32 key, ) : map) { // value is omitted 
+for ((uint32 key, ) : map) { // value is omitted
     keySum += key;
 }
 
@@ -778,6 +809,25 @@ function f() pure public {
 }
 ```
 
+#### arrays
+
+##### \<array\>.empty()
+
+```TVMSolidity
+<array>.empty() returns (bool);
+```
+
+Returns status flag whether the array is empty (its length is 0).
+
+Example:
+
+```TVMSolidity
+uint[] arr;
+require(arr.empty());
+arr.push();
+require(!arr.empty());
+```
+
 #### bytes
 
 `bytes` is array of `byte`. It is similar to `byte[]`. But they are encoded by different ways.
@@ -791,6 +841,14 @@ bytes a = "abzABZ0129";
 bytes b = hex"01239abf";
 ```
 
+##### \<bytes\>.empty()
+
+```TVMSolidity
+<bytes>.empty() returns (bool);
+```
+
+Returns status flag whether the bytes is empty (its length is 0).
+
 ##### \<bytes\>.operator[]
 
 ```TVMSolidity
@@ -798,7 +856,6 @@ bytes b = hex"01239abf";
 ```
 
 Returns a byte located at the **index** position.  
-Warning: **index** must be in range 0 to 126 include.
 
 Example:
 
@@ -845,6 +902,14 @@ Same as [\<TvmCell\>.dataSizeQ()](#tvmcelldatasizeq).
 #### string
 
 TON Solidity compiler expands **string** type with the following functions:
+
+##### \<string\>.empty()
+
+```TVMSolidity
+<string>.empty() returns (bool);
+```
+
+Returns status flag whether the string is empty (its length is 0).
 
 ##### \<string\>.byteLength()
 
@@ -1100,7 +1165,7 @@ parameter `value`.
 ignored. The contract's balance will be equal to zero.
 * `64` - carries funds equal to parameter `value` and all the remaining value of the inbound message.
 
-Also parameter `flag` can be modified:
+Parameter `flag` can also be modified:
 * `flag + 1` - means that the sender wants to pay transfer fees separately from contract's balance.
 * `flag + 2` - means that any errors arising while processing this message during the action phase
 should be ignored.
@@ -1595,14 +1660,19 @@ pragma AbiHeader pubkey;
 pragma AbiHeader expire;
 ```
 
-Force message forming utility to fill an appropriate field(s) in the header of the message to be sent to this contract:
+Force message forming utility to fill an appropriate field(s) in the header of the exteranl inbound  
+message to be sent to this contract:
 
-* **pubkey** - public key by which the message was signed;
+* **pubkey** - public key by which the message can be signed;
 * **time**   - local time at what message was created;
 * **expire** - time at which message should be meant as expired.
 
-**pubkey** field is mandatory for the contract to be able to check message signature which was generated with
-public key that is different from what is stored in this contract data.
+**pubkey** field is optional. Let's consider some cases:
+ * If the message contains signature and optional field `pubkey` is set then the field `pubkey` is
+used to check signature.
+ * If the message contains signature and optional field `pubkey` is empty then the `tvm.pubkey()`
+is used to check signature.
+See also: [msg.pubkey()](#msgpubkey) and [tvm.pubkey()](#tvmpubkey).
 **time** and **expire** fields can be used for replay protection and if set they should be read in [afterSignatureCheck](#aftersignaturecheck) in case of not default replay protection.
 To read more about this and ABI follow this [link](https://docs.ton.dev/86757ecb2/p/40ba94-abi-specification-v2).
 Here is example of [message expiration time](https://docs.ton.dev/86757ecb2/p/88321a-message-expiration-time) usage.
@@ -1785,19 +1855,29 @@ contract ContractB {
 
 #### onBounce
 
-**onBounce** function is executed when contract receives an inbound
-internal message that has bounced flag set. Parameter slice of onBounce
-function contains truncated body of the message (it's truncated by the
-network). If this function is not defined then contract does nothing
-when receives a bounced inbound internal message.
-
 ```TVMSolidity
 onBounce(TvmSlice body) external {
     /*...*/
 }
 ```
 
-More useful example of how to use **onBounce** function:
+`onBounce` function is executed when contract receives a bounced inbound internal message.
+The message is generated by the network if the contract sends an internal message with `bounce: true`and
+ * called contract doesn't exist;
+ * called contract fails at compute phase.
+
+The message is generated only if the remaining message value is enough for that.
+
+**Note:** if called contract fails before compute phase then a bounced internal message is not
+generated.
+
+`body` is empty or contains at most **224** data bits of the original message (without references).
+It depends on the network config. If `onBounce` function is not defined then the contract does
+nothing on receiving a bounced inbound internal message.
+
+If the `onBounce` function throws an exception then another bounced messages are not generated.
+
+More useful example of how to use `onBounce` function:
 
 * [onBounceHandler](https://github.com/tonlabs/samples/blob/master/solidity/16_onBounceHandler.sol)
 
@@ -1960,8 +2040,8 @@ then an internal message is generated.
 And if public/external function is called by internal message and the function isn't marked as
 responsible then return statement has no effect.  
 `value`, `bounce`, `flag` and `currencies` options are used to create the message. Some options can
-be omitted. See [\<address\>.transfer()](#addresstransfer) where this options are described and
-their default values.
+be omitted. See [\<address\>.transfer()](#addresstransfer) where these options and their default
+values are described.
 
 **Note**: if above function `f` is called with `n = 5` and internal/external message must be
 generated then only one message is sent with result `120` (120 = 5 * 4 * 3 * 2 * 1).
@@ -1974,7 +2054,7 @@ TON Solidity compiler allows to specify different parameters of the outbound int
 is sent via external function call. Note, that all external function calls are asynchronous, so
 callee function will be called after termination of current transaction.  
 `value`, `currencies`, `bounce` or `flag` options can be set. See [\<address\>.transfer()](#addresstransfer)
-where this options are described.  
+where these options are described.  
 **Note:** if `value` isn't set then default value is equal to 0.01 ton or 10^7 nanoton. It's equal
 to 10_000 units of gas in workchain).  
 If callee function returns some value and marked as `responsible` then `callback` option must be set.
@@ -2048,6 +2128,17 @@ See also:
  * Example of usage callback: [4.1_CentralBank](https://github.com/tonlabs/samples/blob/master/solidity/4.1_CentralBank.sol)
 and [4.1_CurrencyExchange.sol](https://github.com/tonlabs/samples/blob/master/solidity/4.1_CurrencyExchange.sol)
  * [return](#return)
+
+#### tvm.sendrawmsg()
+
+```TVMSolidity
+tvm.sendrawmsg(TvmCell msg, uint8 flag);
+```
+
+Send the internal/external message `msg` with `flag`. It's wrapper for opcode
+`SENDRAWMSG` ([TVM][1] - A.11.10).
+Internal message `msg` can be generated by [tvm.buildIntMsg()](#tvmbuildintmsg).
+Possible values of `flag` are described here: [\<address\>.transfer()](#addresstransfer).
 
 ### Delete variables
 
@@ -2141,10 +2232,10 @@ the inbound message.
 msg.pubkey() returns (uint256);
 ```
 
-Returns sender's public key, obtained from the body if the external
-inbound message. If message is not signed function returns 0. If
+Returns sender's public key, obtained from the body of the external
+inbound message. If the message is not signed, `msg.pubkey()` returns 0. If the
 message is signed and message header ([pragma AbiHeader](#pragma-abiheader))
-does not contain pubkey then `msg.pubkey()` is equal to `tvm.pubkey()`.
+does not contain `pubkey` then `msg.pubkey()` is equal to `tvm.pubkey()`.
 
 ##### msg.createdAt
 
@@ -2392,14 +2483,14 @@ Generates a `StateInit` ([TBLKCH][2] - 3.1.7.) from `code` and `data`.
 Member `splitDepth` of the tree of cell `StateInit`:
 1) is not set. Has no value.
 2) is set. `0 <= splitDepth <= 31`
-3) Also arguments can be set with names.
+3) Arguments can also be set with names.
 List of possible names:
 
 * `code` (`TvmCell`) - defines the code field of the `StateInit`. Must be specified.
 * `data` (`TvmCell`) - defines the data field of the `StateInit`. Conflicts with `pubkey` and
 `varInit`. Can be omitted, in this case data field would be build from `pubkey` and `varInit`.
-* `splitDepth` (`uint8`) - splitting depth. `0 <= splitDepth <= 31`. Can be omitted. By default has
-no value.
+* `splitDepth` (`uint8`) - splitting depth. `0 <= splitDepth <= 31`. Can be omitted. By default,
+it has no value.
 * `pubkey` (`uint256`) - defines the public key of the new contract. Conflicts with `data`.
 Can be omitted, default value is 0.
 * `varInit` (`initializer list`) - used to set [static](#keyword-static) variables of the contract
@@ -2487,14 +2578,17 @@ original state of contract. `stateInit` contains `data`, `code` and another memb
 See also ([TBLKCH][2] - A.2.3.2) to read about `stateInit`.
 
 Use `stateInit` option if you have the created account state (maybe offchain or
-onchain). And use `code` if want to create account state in `new` expression.
+onchain) and use `code` if want to create account state in `new` expression.
 
 **Note**: Address of the new account is calculated as hash of the `stateInit`.
 Constructor function parameters don't influence the address. See
 [New contract address problem](#new-contract-address-problem).
 
 [Step-by-step description how to deploy contracts from the contract here](https://github.com/tonlabs/samples/blob/master/solidity/17_ContractProducer.md).  
-Example: [WalletProducer](https://github.com/tonlabs/samples/blob/master/solidity/17_ContractProducer.sol).
+
+Examples:
+  * [WalletProducer](https://github.com/tonlabs/samples/blob/master/solidity/17_ContractProducer.sol).
+  * [SelfDeployer](https://github.com/tonlabs/samples/blob/master/solidity/21_self_deploy.sol).
 
 ##### `stateInit` option usage
 
@@ -2518,7 +2612,7 @@ This options can be used only with `code` option:
 
 * `pubkey` (`uint256`) - defines the public key of the new contract.
 * `varInit` (`initializer list`) - used to set [static](#keyword-static) variables of the new contract.
-* `splitDepth` (`uint8`) - splitting depth. `0 <= splitDepth <= 31`. By default has no value.
+* `splitDepth` (`uint8`) - splitting depth. `0 <= splitDepth <= 31`. By default, it has no value.
 
 Example of using of these options:
 
@@ -2554,8 +2648,8 @@ Defaults to an empty set.
 phase!) then funds will be returned. Otherwise (flag isn't set or deploying terminated successfully)
 the address accepts the funds. Defaults to `true`.
 * `wid` (`uint8`) - workchain id of the new account address. Defaults to `0`.
-* `flag` (`uint16`) - flag used to send the outbound internal message. Defaults to `1`. See opcode
-`SENDRAWMSG` ([TVM][1] - A.11.10).
+* `flag` (`uint16`) - flag used to send the outbound internal message. Defaults to `0`.
+Possible values of `flag` are described here: [\<address\>.transfer()](#addresstransfer).
 
 ```TVMSolidity
 TvmCell stateInit = ...;
@@ -2595,6 +2689,32 @@ See [SimpleWallet](https://github.com/tonlabs/samples/blob/master/solidity/17_Si
 **Note**: contract's public key (`tvm.pubkey()`) is a part of `stateInit`.
 
 ##### Misc functions from `tvm`
+
+##### tvm.code()
+
+```TVMSolidity
+tvm.code() returns (TvmCell);
+```
+
+Returns contract's code.
+
+See [SelfDeployer](https://github.com/tonlabs/samples/blob/master/solidity/21_self_deploy.sol).
+
+##### tvm.codeSalt()
+
+```TVMSolidity
+tvm.codeSalt(TvmCell code) returns (optional(TvmCell) optSalt);
+```
+
+If `code` contains salt then `optSalt` contains one. Otherwise, `optSalt` doesn't contain any value.
+
+##### tvm.setCodeSalt()
+
+```TVMSolidity
+tvm.setCodeSalt(TvmCell code, TvmCell salt) returns (TvmCell newCode);
+```
+
+Inserts `salt` into `code` and returns new code `newCode`.
 
 ##### tvm.pubkey()
 
@@ -2684,7 +2804,8 @@ tvm.encodeBody(function, arg0, arg1, arg2, ...) returns (TvmCell);
 tvm.encodeBody(function, callbackFunction, arg0, arg1, arg2, ...) returns (TvmCell);
 ```
 
-Constructs a function call message body that can be used as the payload for [\<address\>.transfer()](#addresstransfer). If `function` returns some value then `callbackFunction` parameter must be set.
+Constructs a function call message body that can be used as the payload for  [\<address\>.transfer()](#addresstransfer).
+If `function` is responsible then `callbackFunction` parameter must be set.
 
 Example:
 
@@ -2709,7 +2830,10 @@ contract Caller {
 }
 ```
 
-See also: [External function calls](#external-function-calls) and [\<TvmSlice\>.decodeFunctionParams()](#tvmslicedecodefunctionparams)
+See also:
+ * [External function calls](#external-function-calls)
+ * [\<TvmSlice\>.decodeFunctionParams()](#tvmslicedecodefunctionparams)
+ * [tvm.buildIntMsg()](#tvmbuildintmsg)
 
 ##### tvm.exit() and tvm.exit1()
 
@@ -2752,7 +2876,7 @@ tvm.buildExtMsg({
     sign: bool,
     pubkey: optional(uint256),
     abiVer: uint8,
-    callbackId: uint32.
+    callbackId: uint32,
     onErrorId: uint32,
     stateInit: TvmCell,
     signBoxHandle: optional(uint32)
@@ -2763,16 +2887,16 @@ returns (TvmCell);
 Function should be used only offchain and intended to be used only in debot contracts.
 Allows to create an external inbound message, that calls the **func** function of the
 contract on address **destination** with specified function arguments.
-Mandatory parameters that are used to form a src address field that is used for debots:
 
+Mandatory parameters that are used to form a src address field that is used for debots:
 * `abiVer` - ABI version.
 * `callbackId` - identifier of the callback function.
 * `onErrorId` - identifier of the function that is called in case of error.
 * `signBoxHandle` - handle of the sign box entity, that engine will use to sign the message.
 
-This parameters are stored in addr_extern and placed to the src field of the message.
-Message is of type [ext_in_msg_info](https://github.com/ton-blockchain/ton/blob/24dc184a2ea67f9c47042b4104bbb4d82289fac1/crypto/block/block.tlb#L127)  
-and src addr is of type [addr_extern](https://github.com/ton-blockchain/ton/blob/24dc184a2ea67f9c47042b4104bbb4d82289fac1/crypto/block/block.tlb#L101)  
+These parameters are stored in addr_extern and placed to the src field of the message.
+Message is of type [ext_in_msg_info](https://github.com/ton-blockchain/ton/blob/24dc184a2ea67f9c47042b4104bbb4d82289fac1/crypto/block/block.tlb#L127)
+and src addr is of type [addr_extern](https://github.com/ton-blockchain/ton/blob/24dc184a2ea67f9c47042b4104bbb4d82289fac1/crypto/block/block.tlb#L101)
 but stores special data:
 
 * callback id - 32 bits;
@@ -2792,7 +2916,7 @@ and can be omitted.
 **true** message is generated with signature field filled with zeroes. This parameter is optional
 and can be omitted (in this case is equal to **false**).
 
-Also user can attach stateInit to the message using `stateInit` parameter.
+User can also attach stateInit to the message using `stateInit` parameter.
 
 Function throws an exception with code 64 if function is called with wrong parameters (pubkey is set
 and has value, but sign is false or omitted).
@@ -2835,7 +2959,7 @@ contract Test {
 }
 ```
 
-Also external inbound message can be built and sent with construction similar to remote contract
+External inbound message can also be built and sent with construction similar to remote contract
 call. It requires call option "extMsg" to be specified with constant true value and other options
 similar to `buildExtMsg` function call.  
 Note: this type of call should be used only offchain in debot contracts.
@@ -2860,6 +2984,31 @@ contract Test {
     }
 }
 ```
+
+##### tvm.buildIntMsg()
+
+```TVMSolidity
+tvm.buildIntMsg({
+    dest: address,
+    value: uint128,
+    call: {function, [callbackFunction,] arg0, arg1, arg2, ...},
+    bounce: bool,
+    currencies: ExtraCurrencyCollection
+})
+returns (TvmCell);
+```
+
+Generates an internal outbound message that contains function call. The cell can be used to send a
+message using [tvm.sendrawmsg()](#tvmsendrawmsg). If the `function` is responsible then  
+`callbackFunction` parameter must be set.
+
+`dest`, `value` and `call` parameters are mandatory. Another parameters can be omitted. See
+[\<address\>.transfer()](#addresstransfer) where these options and their default values are
+described.
+
+See also:
+ * sample [22_sender.sol](https://github.com/tonlabs/samples/blob/master/solidity/22_sender.sol)
+ * [tvm.encodeBody()](#tvmencodebody)
 
 #### **math** namespace
 
@@ -3123,6 +3272,23 @@ rnd.shuffle(someNumber);
 rnd.shuffle();
 ```
 
+#### Exponentiation
+
+Exponentiation `**` is only available for unsigned types in the exponent. The resulting type of an
+exponentiation is always equal to the type of the base. Please take care that it is large enough to
+hold the result and prepare for potential assertion failures or wrapping behaviour.
+
+Note that `0**0` throws an exception.
+
+Example:
+
+```TVMSolidity
+uint b = 3;
+uint32 p = 4;
+uint res = b ** p;
+require(res == 81);
+```
+
 #### selfdestruct
 
 ```TVMSolidity
@@ -3154,7 +3320,7 @@ in the root cell of `slice` are used.
 b[129], b[130] ...` elements are ignored.
 3. Same as for `bytes`: only the first 127 bytes are taken into account.
 
-Also see [tvm.hash()](#tvmhash) to compute representation hash of the whole tree of cells.
+See also [tvm.hash()](#tvmhash) to compute representation hash of the whole tree of cells.
 
 #### gasToValue
 
@@ -3188,7 +3354,7 @@ Solidity runtime error codes:
 * 55 - See [tvm.insertPubkey()](#tvminsertpubkey).
 * 57 - External inbound message is expired. See `expire` in [pragma AbiHeader](#pragma-abiheader).
 * 58 - External inbound message has no signature but has public key. See `pubkey` in [pragma AbiHeader](#pragma-abiheader).
-* 60 - Inbound message has wrong function id. In contract there are no functions with such function id and also there is no fallback function which could handle the message. See [fallback](#fallback).
+* 60 - Inbound message has wrong function id. In contract there are no functions with such function id and there is no fallback function which could handle the message. See [fallback](#fallback).
 * 61 - Deploying `StateInit` has no public key in `data` field.
 * 62 - Reserved for internal usage.
 * 63 - See [\<optional(Type)\>.get()](#optionaltypeget).
@@ -3238,6 +3404,39 @@ require(math.divr(5, 10) == 1);
 require(math.divr(15, 10) == 2);
 ```
 
+###  Gas optimization hints
+
+Try to reduce count of `[]` operations with mappings and arrays. For example:
+
+```TVMSolidity
+Struct Point {
+    uint x;
+    uint y;
+    uint z;
+}
+
+Point[] points;
+```
+
+Here we have 3 `[]` operations:
+
+```TVMSolidity
+points[0].x = 5;
+points[0].y = 10;
+points[0].z = -5;
+```
+
+We can use a temp variable:
+
+```TVMSolidity
+Point p = points[0];
+p.x = 5;
+p.y = 10;
+p.z = -5;
+points[0] = p;
+```
+
 [1]: https://ton.org/tvm.pdf        "TVM"
 [2]: https://ton.org/tblkch.pdf     "TBLKCH"
 [3]: https://github.com/ton-blockchain/ton/blob/master/crypto/block/block.tlb "TL-B scheme"
+

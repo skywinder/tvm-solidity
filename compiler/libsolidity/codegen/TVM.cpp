@@ -36,7 +36,8 @@ void TVMCompilerProceedContract(
 	bool withDebugInfo,
 	const std::string& solFileName,
 	const std::string& outputFolder,
-	const std::string& filePrefix
+	const std::string& filePrefix,
+	bool doPrintFunctionIds
 ) {
     GlobalParams::g_errorReporter = errorReporter;
     GlobalParams::g_withDebugInfo = withDebugInfo;
@@ -47,8 +48,12 @@ void TVMCompilerProceedContract(
 	if (filePrefix.empty()) {
 		pathToFiles = boost::filesystem::path{solFileName}.stem().string();
 	} else {
-		// TODO check that filePrefix is not path. It doesn't contain / or \ or ..
 		pathToFiles = filePrefix;
+		boost::filesystem::path p(filePrefix);
+		if (filePrefix != p.filename()) {
+			fatal_error(string{} + "Option -f takes basename of output file(s).\n" +
+				"\"" + filePrefix + "\" looks like a path. Use option -o to set an output directory.");
+		}
 	}
 
 	if (!outputFolder.empty()) {
@@ -64,11 +69,15 @@ void TVMCompilerProceedContract(
     }
 
 	PragmaDirectiveHelper pragmaHelper{*pragmaDirectives};
-	if (generateCode) {
-		TVMContractCompiler::proceedContract(pathToFiles + ".code", _contract, pragmaHelper);
-	}
-	if (generateAbi) {
-		TVMContractCompiler::generateABI(pathToFiles + ".abi.json", &_contract, *pragmaDirectives);
+	if (doPrintFunctionIds) {
+		TVMContractCompiler::printFunctionIds(_contract, pragmaHelper);
+	} else {
+		if (generateCode) {
+			TVMContractCompiler::proceedContract(pathToFiles + ".code", _contract, pragmaHelper);
+		}
+		if (generateAbi) {
+			TVMContractCompiler::generateABI(pathToFiles + ".abi.json", &_contract, *pragmaDirectives);
+		}
 	}
 
 }

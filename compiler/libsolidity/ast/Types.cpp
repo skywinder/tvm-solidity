@@ -1783,6 +1783,16 @@ MemberList::MemberMap ArrayType::nativeMembers(ContractDefinition const*) const
 {
 	MemberList::MemberMap members;
 
+	members.emplace_back("empty", TypeProvider::function(
+			{},
+			{TypeProvider::boolean()},
+			{},
+			{{}},
+			FunctionType::Kind::ArrayEmpty,
+			false,
+			StateMutability::Pure
+	));
+
 	if (isByteArray())
 	{
 		members.emplace_back("toSlice", TypeProvider::function(
@@ -2887,12 +2897,14 @@ string FunctionType::richIdentifier() const
 	case Kind::LogTVM: id += "logtvm"; break;
 	case Kind::TVMAccept: id += "tvmaccept"; break;
 	case Kind::TVMBuildExtMsg: id += "tvmbuildextmsg"; break;
+	case Kind::TVMBuildIntMsg: id += "tvmbuildintmsg"; break;
 	case Kind::TVMBuildStateInit: id += "tvmbuildstateinit"; break;
 
 	case Kind::TVMBuilderMethods: id += "tvmbuildermethods"; break;
 	case Kind::TVMBuilderStore: id += "tvmbuilderstore"; break;
 
 	case Kind::TVMChecksign: id += "tvmchecksign"; break;
+	case Kind::TVMCode: id += "tvmcode"; break;
 	case Kind::TVMCommit: id += "tvmcommit"; break;
 	case Kind::TVMConfigParam: id += "tvmconfigparam"; break;
 	case Kind::TVMDeploy: id += "tvmdeploy"; break;
@@ -2981,6 +2993,7 @@ string FunctionType::richIdentifier() const
 	case Kind::ValueToGas: id += "valuetogas"; break;
 	case Kind::GasToValue: id += "gastovalue"; break;
 
+	case Kind::ArrayEmpty: id += "arrayempty"; break;
 	case Kind::ArrayPush: id += "arraypush"; break;
 	case Kind::ArrayPop: id += "arraypop"; break;
 	case Kind::ByteArrayPush: id += "bytearraypush"; break;
@@ -3924,6 +3937,9 @@ MemberList::MemberMap MagicType::nativeMembers(ContractDefinition const*) const
 		});
 	case Kind::TVM: {
 		MemberList::MemberMap members = {
+			{"code", TypeProvider::function({}, {TypeProvider::tvmcell()}, {}, {{}}, FunctionType::Kind::TVMCode, false, StateMutability::Pure)},
+			{"codeSalt", TypeProvider::function({TypeProvider::tvmcell()}, {TypeProvider::optional(TypeProvider::tvmcell())}, {{}}, {{}}, FunctionType::Kind::TVMCode, false, StateMutability::Pure)},
+			{"setCodeSalt", TypeProvider::function({TypeProvider::tvmcell(), TypeProvider::tvmcell()}, {TypeProvider::tvmcell()}, {{}, {}}, {{}}, FunctionType::Kind::TVMCode, false, StateMutability::Pure)},
 			{"pubkey", TypeProvider::function(strings(), strings{"uint"}, FunctionType::Kind::TVMPubkey, false, StateMutability::Pure)},
 			{"setPubkey", TypeProvider::function({"uint"}, {}, FunctionType::Kind::TVMSetPubkey, false, StateMutability::NonPayable)},
 			{"accept", TypeProvider::function(strings(), strings(), FunctionType::Kind::TVMAccept, false, StateMutability::Pure)},
@@ -4074,7 +4090,7 @@ MemberList::MemberMap MagicType::nativeMembers(ContractDefinition const*) const
 						string("callbackId"),	// mandatory
 						string("abiVer"),		// mandatory
 						string("onErrorId"),	    // mandatory
-                        string("signBoxHandle"),	// can be omitted
+						string("signBoxHandle"),	// can be omitted
 						string("time"),			// can be omitted
 						string("expire"),		// can be omitted
 						string("pubkey"),		// can be omitted
@@ -4083,6 +4099,28 @@ MemberList::MemberMap MagicType::nativeMembers(ContractDefinition const*) const
 				strings{string()},
 				FunctionType::Kind::TVMBuildExtMsg,
 				true, StateMutability::Pure
+		));
+
+
+		members.emplace_back("buildIntMsg", TypeProvider::function(
+			{
+				TypeProvider::address(),
+				TypeProvider::uint(128),
+				TypeProvider::extraCurrencyCollection(),
+				TypeProvider::boolean(),
+				TypeProvider::callList(),
+			},
+			{TypeProvider::tvmcell()},
+			{
+				"dest", // mandatory
+				"value", // mandatory
+				"currencies", // can be omitted
+				"bounce", // can be omitted
+				"call", // mandatory
+			},
+			{{}},
+			FunctionType::Kind::TVMBuildIntMsg,
+			true, StateMutability::Pure
 		));
 
 		members.emplace_back("buildStateInit", TypeProvider::function(
@@ -4818,6 +4856,15 @@ MemberList::MemberMap TvmBuilderType::nativeMembers(const ContractDefinition *) 
 
 	members.emplace_back("storeRef", TypeProvider::function(
 			{TypeProvider::tvmcell()},
+			{},
+			{{}},
+			{},
+			FunctionType::Kind::TVMBuilderMethods,
+			false, StateMutability::Pure
+	));
+
+	members.emplace_back("storeRef", TypeProvider::function(
+			{TypeProvider::tvmslice()},
 			{},
 			{{}},
 			{},
