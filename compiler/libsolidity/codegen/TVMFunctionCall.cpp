@@ -2025,9 +2025,9 @@ bool FunctionCallCompiler::checkForTvmFunction(const MemberAccess &_node) {
 	} else if (_node.memberName() == "hash") { // tvm.hash
 		pushArgs();
 		m_pusher.push(0, "HASHCU");
-        } else if (_node.memberName() == "vergrth16") { // tvm.vergrth16
-                pushArgs();
-                m_pusher.push(0, "VERGRTH16");
+    } else if (_node.memberName() == "vergrth16") { // tvm.vergrth16
+        pushArgs();
+        m_pusher.push(0, "VERGRTH16");
 	} else if (_node.memberName() == "checkSign") { // tvm.checkSign
 		size_t cnt = m_arguments.size();
 		if (getType(m_arguments[0].get())->category() == Type::Category::TvmSlice) {

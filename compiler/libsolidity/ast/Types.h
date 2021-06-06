@@ -1214,7 +1214,7 @@ public:
 		TVMExit1, ///< tvm.exit1()
 		TVMFunctionId, ///< tvm.functionId(function_name)
 		TVMHash, ///< tvm.hash()
-                TVMVerGrth16, ///< tvm.vergrth16()
+        TVMVerGrth16, ///< tvm.vergrth16()
 		TVMPubkey, ///< tvm.pubkey()
 		TVMRawConfigParam, ///< tvm.rawConfigParam()
 		TVMResetStorage, ///< tvm.resetStorage()

@@ -309,7 +309,7 @@ void ViewPureChecker::endVisit(MemberAccess const& _memberAccess)
 			{MagicType::Kind::TVM, "exit1"},
 			{MagicType::Kind::TVM, "functionId"},
 			{MagicType::Kind::TVM, "hash"},
-                        {MagicType::Kind::TVM, "vergrth16"},
+            {MagicType::Kind::TVM, "vergrth16"},
 			{MagicType::Kind::TVM, "hexdump"},
 			{MagicType::Kind::TVM, "insertPubkey"},
 			{MagicType::Kind::TVM, "log"},
